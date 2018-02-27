@@ -116,7 +116,7 @@ def train_lstm(model, lcs, Y, split, batch_size, epochs):
 def train_multi_lstm_old(model, cfgs, lcs, Y, split, batch_size, epochs):
     x_train, x_val = lcs[:split], lcs[split:]
     y_train, y_val = Y[:split], Y[split:]
-
+    cfgs_train, cfgs_val = cfgs[:split], cfgs[split:]
     print(x_train.shape, x_val.shape, cfgs_train.shape, cfgs_val.shape, y_train.shape, y_val.shape)    
 
     model.fit([cfgs_train, x_train], y_train,
@@ -150,6 +150,7 @@ def train_multi_lstm(model, x_cfgs, Y, split, batch_size, epochs):
               batch_size=batch_size, epochs=epochs,
               validation_data=(x_cfgs_val, y_val))
 
+# check if model.fit works with array of tuples instead of tuple of arrays... --> does not work    
 def train_multi_lstm_test(model, x_cfgs, Y, split, batch_size, epochs):
     x_cfgs_train, x_cfgs_val = [], []
     
