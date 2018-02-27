@@ -1,0 +1,76 @@
+
+*******  xgb  ********************
+
+{'maxdepth': 3, 'lr': 0.36911114713726767, 'gamma': 0.08369933844814292, 'cols_bt': 0.9627370679666836, 'n_estimators': 215, 'subsample': 0.9872285626667322}
+call cross_val_score epochs 0, with config {'maxdepth': 3, 'lr': 0.36911114713726767, 'gamma': 0.08369933844814292, 'cols_bt': 0.9627370679666836, 'n_estimators': 215, 'subsample': 0.9872285626667322}
+MSE xgb: mean 0.00833 std: 0.0032
+MSE of all Folds: [ 0.01246  0.00463  0.0079 ]
+
+XGB
+call cross_val_score epochs 0, with config {'maxdepth': 4, 'lr': 0.07120217610550672, 'gamma': 0.03393596760993278, 'cols_bt': 0.823494199726015, 'n_estimators': 107, 'subsample': 0.7288741544938715}
+MSE xgb: mean 0.00747 std: 0.0030
+MSE of all Folds: [ 0.0109   0.00355  0.00795]
+
+{'maxdepth': 10, 'lr': 0.08119864140758115, 'gamma': 0.007833441242813044, 'cols_bt': 0.9376450587145334, 'n_estimators': 50, 'subsample': 0.7946631901813815}
+call cross_val_score epochs 0, with config {'maxdepth': 10, 'lr': 0.08119864140758115, 'gamma': 0.007833441242813044, 'cols_bt': 0.9376450587145334, 'n_estimators': 50, 'subsample': 0.7946631901813815}
+MSE xgb: mean 0.00734 std: 0.0030
+MSE of all Folds: [ 0.01109  0.00368  0.00725]
+
+Best XGB:
+call cross_val_score epochs 0, with config {'maxdepth': 10, 'lr': 0.08119864140758115, 'gamma': 0.007833441242813044, 'cols_bt': 0.9376450587145334, 'n_estimators': 1000, 'subsample': 0.7946631901813815}
+MSE xgb: mean 0.00704 std: 0.0029
+
+
+*******  MLP  ********************
+{'lr': 0.42413831388014755, 'batch_size': 19}
+call cross_val_score 100 epochs, with config {'lr': 0.42413831388014755, 'batch_size': 19}
+MSE mlp: mean *** 0.00678 *** std: 0.0014
+
+{'lr': 0.42413831388014755, 'batch_size': 19}
+evaluating with early stopping
+call cross_val_score 3000 epochs, with config {'lr': 0.42413831388014755, 'batch_size': 19}
+Epoch 00443: early stopping
+Epoch 00516: early stopping
+Epoch 00499: early stopping
+MSE mlp: mean *** 0.00620 *** std: 0.0005
+
+call cross_val_score 1000 epochs, with config {'lr': 0.12413831388014755, 'batch_size': 20}
+MSE mlp: mean *** 0.00601 *** std: 0.0010
+
+evaluating with exponential decay
+call cross_val_score 1000 epochs, with config {'lr': 0.3013474827989724, 'batch_size': 22, 'k_exp': 0.02043479631870928}
+MSE mlp: mean *** 0.00723 *** std: 0.0004
+
+evaluating with exponential decay
+call cross_val_score 2000 epochs, with config {'lr': 0.2013474827989724, 'batch_size': 22, 'k_exp': 0.005043479631870928}
+Epoch 00611: early stopping
+Epoch 00596: early stopping
+Epoch 00508: early stopping
+MSE mlp: mean *** 0.00581 *** std: 0.0002
+
+
+call cross_val_score 3000 epochs, with config {'lr': 0.05013474827989724, 'batch_size': 22, 'k_exp': 0.001043479631870928}
+Epoch 01041: early stopping
+MSE mlp: mean *** 0.00615 *** std: 0.0002
+
+call cross_val_score 3000 epochs, with config {'lr': 0.03013474827989724, 'batch_size': 22, 'k_exp': 0.001043479631870928}
+Epoch 01384: early stopping
+MSE mlp: mean *** 0.00654 *** std: 0.0005
+
+call cross_val_score 3000 epochs, with config {'lr': 0.02013474827989724, 'batch_size': 22, 'k_exp': 0.001043479631870928}
+Epoch 01386: early stopping
+MSE mlp: mean *** 0.00677 *** std: 0.0004
+
+with Adam optimizer
+evaluating with early stopping
+call cross_val_score 2000 epochs, with config {'lr': 0.001033500230671202, 'batch_size': 24}
+Epoch 00308: early stopping
+Epoch 00665: early stopping
+Epoch 00606: early stopping
+MSE mlp: mean *** 0.00965 *** std: 0.0015
+
+
+evaluating with early stopping
+call cross_val_score 2000 epochs, with config {'lr': 0.01033500230671202, 'batch_size': 24}
+MSE mlp: mean *** 0.00653 *** std: 0.0004
+
