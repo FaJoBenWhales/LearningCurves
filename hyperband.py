@@ -270,6 +270,6 @@ def optimize(X,Y,
     # print("all_configs",all_configs)
     
     best_cfg = all_configs[best_cfg_id]['config']
-    print("return best_cfg: ",best_cfg)
+    print("return best config: ",best_cfg)
     
     return best_cfg

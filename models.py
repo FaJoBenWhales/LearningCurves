@@ -100,10 +100,11 @@ def train_mlp(model, configs, Y, cfg, split, epochs):
     y_train, y_val = Y[:split], Y[split:]
     # print(configs_train.shape, configs_val.shape, y_train.shape, y_val.shape)    
 
-    model.fit(configs_train, y_train,
-              batch_size=cfg['batch_size'], 
-              epochs=epochs,
-              validation_data=(configs_val, y_val))
+    hist = model.fit(configs_train, y_train,
+                     batch_size=cfg['batch_size'], 
+                     epochs=epochs,
+                     validation_data=(configs_val, y_val))
+    return hist
 
 
 def eval_mlp(model, configs, Y, split, batch_size):
@@ -122,10 +123,12 @@ def train_lstm(model, lcs, Y, split, batch_size, epochs):
     x_train, x_val = lcs[:split], lcs[split:]
     y_train, y_val = Y[:split], Y[split:]
 
-    model.fit(x_train, y_train,
-              batch_size=batch_size, epochs=epochs,
-              validation_data=(x_val, y_val))
+    hist = model.fit(x_train, y_train,
+                     batch_size=batch_size, epochs=epochs,
+                     validation_data=(x_val, y_val))
+    return hist
 
+    
 
 def eval_lstm(model, lcs, Y, split, batch_size):
     
@@ -146,9 +149,10 @@ def train_multi_lstm(model, configs, lcs, Y, split, batch_size, epochs):
     configs_train, configs_val = configs[:split], configs[split:]
     # print(x_train.shape, x_val.shape, configs_train.shape, configs_val.shape, y_train.shape, y_val.shape)    
 
-    model.fit([configs_train, x_train], y_train,
-              batch_size=batch_size, epochs=epochs,
-              validation_data=([configs_val, x_val], y_val))
+    hist = model.fit([configs_train, x_train], y_train,
+                     batch_size=batch_size, epochs=epochs,
+                     validation_data=([configs_val, x_val], y_val))
+    return hist
 
 
 def eval_multi_lstm(model, configs, lcs, Y, split, batch_size):
@@ -163,8 +167,8 @@ def eval_multi_lstm(model, configs, lcs, Y, split, batch_size):
 
 
 def exp_decay(epoch, lr, k_exp=1):
+    
     initial_lrate = lr    
-    # print("exp decay with k = ", k_exp)
     k = k_exp  
     lrate = initial_lrate * np.exp(-k*epoch)
     if (epoch % 100 == 0):
@@ -198,18 +202,15 @@ class MyLearningRateScheduler(Callback):
 
 
 def get_estimator(model_type, X = None, epochs = 20, cfg = {}, **kwargs):
-    # print("get estimator type: ", model_type)
 
     if model_type == 'ridge':
         if cfg=={}:
             cfg={'alpha':1.0}
-            
         estimator = linear_model.Ridge(alpha = cfg['alpha'])
         
     elif model_type == 'xgb':
         if cfg=={}:
             cfg = {'lr':0.08, 'gamma':0.0, 'subsample':0.75, 'cols_bt':1, 'maxdepth':7}
-
         # print("call xgb estimator with cfg:", cfg)    
         estimator = xgb.XGBRegressor(n_estimators=cfg['n_estimators'], 
                                      learning_rate = cfg['lr'], 
@@ -224,7 +225,6 @@ def get_estimator(model_type, X = None, epochs = 20, cfg = {}, **kwargs):
                                    epochs=epochs, batch_size=cfg['batch_size'], verbose=0)
         
     elif model_type == 'lstm':
-        # print("x_shape[0]",X[0][2].shape[0])
         estimator = KerasRegressor(build_fn=lstm, input_dim = X[0][2].shape[0], 
                                    epochs=epochs, batch_size=cfg['batch_size'], verbose=1)
         
@@ -243,29 +243,52 @@ def get_estimator(model_type, X = None, epochs = 20, cfg = {}, **kwargs):
 def eval_cv(model_type, X, Y, cfg, epochs=0, splits = 3, 
             lr_exp_decay=False, earlystop=False, dropout=False, L1L2=False):
     
-    fit_params = {}
-    if model_type == 'mlp':
-        callbacks = []
-        if earlystop==True:
-            callbacks.append(EarlyStopping(monitor='loss', min_delta=0.0001, patience=100, verbose=1, mode='auto'))
-            print("evaluating with early stopping")
+    print("cross validate {} epochs, with config {}".format(epochs,cfg))
+
+    callbacks = []
+    if earlystop==True:
+        callbacks.append(EarlyStopping(monitor='loss', min_delta=0.0001, patience=100, verbose=1, mode='auto'))
+        print("evaluating with early stopping")
+
+    if lr_exp_decay==True:
+        lrate = MyLearningRateScheduler(exp_decay, init_lr = cfg['lr'], k_exp=cfg['k_exp'])
+        callbacks.append(lrate)
+        print("evaluating with exponential decay")
+
+    kfold = KFold(n_splits=splits, random_state=t.seed)        
+
+    # work-around with own cross validation, as cross_val_score does not accept multiple inputs        
+    if model_type == 'multi_lstm':
+        
+        model = multi_lstm()
+        results=[]
+        
+        # in case of multi_lstm X is a tuple [configs, lcs]
+        for train, val in k_fold.split(X[0]):
             
-        if lr_exp_decay==True:
-            lrate = MyLearningRateScheduler(exp_decay, init_lr = cfg['lr'], k_exp=cfg['k_exp'])
-            callbacks.append(lrate)
-            print("evaluating with exponential decay")
+            hist = model.fit([X[0][train], X[1][train]], Y[train],
+                             batch_size=cfg['batch_size'], 
+                             epochs=epochs, 
+                             callbacks=callbacks,
+                             validation_data=([X[0][val], X[1][val]], Y[val]))
+            
+            results.append(hist.history['val_mean_squared_error'][-1])
+            
+        results = np.array(results)
+        
+    else:
 
-        fit_params = {'callbacks': callbacks}
-    
-    estimator = get_estimator(model_type, X, epochs, cfg, dropout=dropout, L1L2=L1L2)
+        fit_params = {}        
+        if model_type == 'mlp':
+            fit_params = {'callbacks': callbacks}
 
-    kfold = KFold(n_splits=splits, random_state=t.seed)
-    # enforce MSE as scoring, to get comparable results for different models 
-    print("call cross_val_score {} epochs, with config {}".format(epochs,cfg))
-    results = cross_val_score(estimator, X, Y, cv=kfold, scoring='neg_mean_squared_error', verbose=1,
-                              fit_params=fit_params)
-    print("MSE {}: mean *** {:.5f} *** std: {:.4f}".format(model_type, -results.mean(), results.std()))
+        estimator = get_estimator(model_type, X, epochs, cfg, dropout=dropout, L1L2=L1L2)
+
+        # enforce MSE as scoring, to get comparable results for different models 
+        results = cross_val_score(estimator, X, Y, cv=kfold, scoring='neg_mean_squared_error', verbose=1,
+                                  fit_params=fit_params)
+        
+    print("MSE {}: mean *** {:.5f} *** std: {:.4f}".format(model_type, abs(results.mean()), results.std()))
     print("Result of all Folds: {}".format(np.round(results,4)))
     
     return results
-
