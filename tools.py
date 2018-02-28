@@ -12,12 +12,12 @@ from sklearn import preprocessing
 
 # global variables
 seed = 42
-
-# global variables for controlling some behaviour
-# app_params ={'dropout' : False,
-#             'L1L2' : False,
-#             'earlystop' : True, 
-#             'lr_exp_decay' : False}
+'''
+regul = {'lr_exp_decay' : False,
+         'earlystop' : False, 
+         'dropout' : False, 
+         'L1L2' : False}
+'''         
 
 def get_run_name(prefix="run", additional=""):
     return "_".join([prefix, 

@@ -14,7 +14,7 @@ import xgboost as xgb
 
 import tools as t
 
-
+# passing a dictionary (cfg) to mlp triggers a deprecation warning - passing simple parameters does not (??)
 def mlp(lr=None, dropout=False, L1L2=False):
     
     # print("create mlp using learning rate:", lr)
@@ -197,7 +197,7 @@ class MyLearningRateScheduler(Callback):
             print('\nEpoch %05d: LearningRateScheduler reducing learning rate to %s.' % (epoch + 1, lr))
 
 
-def get_estimator(model_type, X = None, epochs = 20, cfg = {}, dropout=False, L1L2=False):
+def get_estimator(model_type, X = None, epochs = 20, cfg = {}, **kwargs):
     # print("get estimator type: ", model_type)
 
     if model_type == 'ridge':
@@ -219,13 +219,14 @@ def get_estimator(model_type, X = None, epochs = 20, cfg = {}, dropout=False, L1
                                      max_depth = cfg['maxdepth'])
         
     elif model_type == 'mlp':     
-        estimator = KerasRegressor(build_fn=mlp, lr = cfg['lr'], dropout=dropout, L1L2=L1L2, epochs=epochs, 
-                                   batch_size=cfg['batch_size'], verbose=0)
+        estimator = KerasRegressor(build_fn=mlp, lr = cfg['lr'], 
+                                   dropout=kwargs.get('dropout',False), L1L2=kwargs.get('L1L2',False),
+                                   epochs=epochs, batch_size=cfg['batch_size'], verbose=0)
         
     elif model_type == 'lstm':
-        print("x_shape[1]",X.shape[1])
-        estimator = KerasRegressor(build_fn=lstm, input_dim = X.shape[1], epochs=epochs, 
-                                   batch_size=cfg['batch_size'], verbose=1)
+        # print("x_shape[0]",X[0][2].shape[0])
+        estimator = KerasRegressor(build_fn=lstm, input_dim = X[0][2].shape[0], 
+                                   epochs=epochs, batch_size=cfg['batch_size'], verbose=1)
         
     elif model_type == 'multi_lstm':
         estimator = KerasRegressor(build_fn=multi_lstm, epochs=epochs, 
@@ -239,8 +240,8 @@ def get_estimator(model_type, X = None, epochs = 20, cfg = {}, dropout=False, L1
 
 
 # create and train model and evaluate by cross validation
-def eval_cv(model_type, X, Y, cfg = {}, epochs=0, splits = 3, 
-            lr_exp_decay=False, earlystop=True, dropout=False, L1L2=False):
+def eval_cv(model_type, X, Y, cfg, epochs=0, splits = 3, 
+            lr_exp_decay=False, earlystop=False, dropout=False, L1L2=False):
     
     fit_params = {}
     if model_type == 'mlp':
@@ -264,6 +265,7 @@ def eval_cv(model_type, X, Y, cfg = {}, epochs=0, splits = 3,
     results = cross_val_score(estimator, X, Y, cv=kfold, scoring='neg_mean_squared_error', verbose=1,
                               fit_params=fit_params)
     print("MSE {}: mean *** {:.5f} *** std: {:.4f}".format(model_type, -results.mean(), results.std()))
+    print("Result of all Folds: {}".format(np.round(results,4)))
     
     return results
 

@@ -104,7 +104,7 @@ def configuration_space_from_raw(hpRaw, hpRawConditions, resolve_multiple='AND')
     return cs
 
 
-def get_keras_config_space(model_type):
+def get_keras_config_space(model_type, lr_exp_decay=False):
     
     if model_type == 'ridge':
         hpRaw = [
@@ -123,7 +123,7 @@ def get_keras_config_space(model_type):
         ]
         
     elif model_type == 'mlp':
-        if t.mlp_cfg['lr_exp_decay']:
+        if lr_exp_decay == True:
             hpRaw = [
                 ['lr',                       [0.02, 0.2],     0.2,            True,    'float'],
                 ['k_exp',                    [0.001,0.1],     0.04,           True,    'float'],
@@ -135,7 +135,7 @@ def get_keras_config_space(model_type):
                 ['batch_size',               [16, 64],           32,           True,    'int'],
             ] 
  
-    elif model_type == 'lstm':
+    elif model_type == 'lstm' or model_type == 'multi_lstm':
         hpRaw = [
             # ['lr',                       [0.0001, 0.5],     0.05,          True,    'float'],
             ['batch_size',                   [1, 10],           10,           True,    'int'],
@@ -154,11 +154,13 @@ def get_keras_config_space(model_type):
     return configuration_space_from_raw(hpRaw, hpRawConditions, resolve_multiple='AND')
 
 
-def objective_crossval(X, Y, config, epochs, model_type, save_data_path="plots", *args, **kwargs):
+def objective_crossval(X, Y, config, epochs, model_type, regul, save_data_path="plots", *args, **kwargs):
     
     start_time = time.time()
 
-    results = m.eval_cv(model_type, X, Y, cfg=config, epochs=epochs, splits = 4) 
+    results = m.eval_cv(model_type, X, Y, cfg=config, epochs=epochs, splits = 3,
+                        lr_exp_decay=regul['lr_exp_decay'], earlystop=regul['earlystop'], 
+                        dropout=regul['dropout'], L1L2=regul['L1L2'])
 
     runtime = time.time() - start_time
     histories = [1,2,3]   # dummy for history
@@ -167,12 +169,14 @@ def objective_crossval(X, Y, config, epochs, model_type, save_data_path="plots",
 
 
 class WorkerWrapper(Worker):
-    def __init__(self, X, Y, model_type, save_data_path, objective_function, *args, **kwargs):
+    def __init__(self, X, Y, model_type, save_data_path, objective_function, regul, *args, **kwargs):
         self.X = X
         self.Y = Y
         self.model_type = model_type    # 'ridge', 'mlp' etc. 
+        self.regul = regul
         self.save_data_path = save_data_path
         self.objective_function = objective_function
+        
         super().__init__(*args, **kwargs)
     
     def compute(self, config, budget, *args, **kwargs):
@@ -183,6 +187,7 @@ class WorkerWrapper(Worker):
                 config,
                 epochs=int(budget),
                 model_type=self.model_type,
+                regul=self.regul, 
                 base_path=self.save_data_path,
                 *args, **kwargs)
         finally:
@@ -198,25 +203,35 @@ def optimize(X,Y,
              objective=objective_crossval,
              config_space_getter=get_keras_config_space,
              model_type='ridge',
-             min_budget=1,
-             max_budget=128,
+             min_budget=1, max_budget=128,
              job_queue_sizes=(0, 1),
+             lr_exp_decay=False, earlystop=False, dropout=False, L1L2=False,
              base_path="plots",
              run_name=""):
+             # **kwargs):   # pass arguments as "earlystopping, lr_ecp_decay etc. parametrising the objective function
+
+    regul = {'lr_exp_decay' : lr_exp_decay,
+             'earlystop' : earlystop, 
+             'dropout' : dropout, 
+             'L1L2' : L1L2}        
     
-    run_name = t.get_run_name(prefix="hyperband", additional=run_name)
-    path = os.path.join(base_path, run_name)
-    if not os.path.isdir(path):
-        os.makedirs(path)
+    save_path = ''
+    if run_name != '':
+        run_name = t.get_run_name(prefix="hyperband", additional=run_name)
+        save_path = os.path.join(base_path, run_name)
+        if not os.path.isdir(save_path):
+            os.makedirs(save_path)
     
     nameserver, ns_port = hpbandster.distributed.utils.start_local_nameserver()
     # starting the worker in a separate thread
     w = WorkerWrapper(X, Y, 
                       model_type=model_type,
-                      save_data_path=path,
+                      save_data_path=save_path,
+                      regul=regul,                      
                       objective_function=objective,
                       nameserver=nameserver,
                       ns_port=ns_port)
+    # , **kwargs)
     w.run(background=True)
 
     cs = config_space_getter(model_type)
@@ -241,8 +256,9 @@ def optimize(X,Y,
     HB.shutdown(shutdown_workers=True)
 
     # pickle res
-    with open(os.path.join(path, "hyperband_res.pkl"), 'w+b') as f:
-        pickle.dump(res, f)
+    if save_path != '':    
+        with open(os.path.join(save_path, "hyperband_res.pkl"), 'w+b') as f:
+            pickle.dump(res, f)
     # save incumbent trajectory as csv
     traj = res.get_incumbent_trajectory()
     incumbent_performance = traj["losses"]
