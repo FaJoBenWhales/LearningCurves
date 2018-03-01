@@ -34,7 +34,7 @@ def configs_to_arr(configs):
     return cfg_arr
 
 
-def load_data(source_dir='./data/final_project', timesteps = 5, scale_configs = True):
+def load_data(source_dir='./data/final_project', scale_configs = True):
     
     data_dim = 1    
     configs = []
@@ -44,25 +44,21 @@ def load_data(source_dir='./data/final_project', timesteps = 5, scale_configs = 
             tmp = json.load(fh)
             configs.append(tmp['config'])   # list of dicts
             learning_curves.append(tmp['learning_curve'])
-    # print("loaded {} learning curves and configs".format(len(configs)))
 
-    cfg_arr = configs_to_arr(configs)     # from list of dicts to np.array
+    configs = configs_to_arr(configs)     # from list of dicts to np.array
     
     if scale_configs:
         print("scaling configuration data")
-        cfg_arr = preprocessing.scale(cfg_arr)
+        configs = preprocessing.scale(configs)
    
-    learning_curves = np.array(learning_curves)
-    Y = learning_curves[:,-1] 
-
-    lcs = learning_curves[:,:timesteps]
-    # print(x_train.shape, y_train.shape, x_val.shape, y_val.shape)
+    lcs = np.array(learning_curves)
+    Y = lcs[:,-1] 
 
     # Keras LSTM expects data as [sample_no, timesteps, feature_no (X.shape[1]) ]
-    lcs = lcs.reshape(lcs.shape[0], timesteps, data_dim) 
+    lcs = lcs.reshape(lcs.shape[0], lcs.shape[1], data_dim) 
     Y = Y.reshape(Y.shape[0],1)    
 
-    return cfg_arr, lcs, Y
+    return configs, lcs, Y
 
 
 def load_lstm_data_concat_cfg(timesteps):

@@ -54,10 +54,9 @@ def lstm(input_dim=1):
     
     model = Sequential()
     model.add(LSTM(64, return_sequences=True,
-                   # input shape = (timesteps, data_dim) - but timesteps can be None for flexible use
+                   # input shape = (steps, data_dim) - but steps can be None for flexible use
                    input_shape=(None, data_dim)))  # returns a sequence of vectors of dimension 32
     model.add(LSTM(64))  # return a single vector of dimension 32
-    # model.add(Dense(10, activation='softmax'))
     model.add(Dense(64))
     model.add(Dense(64))
     model.add(Dense(1))    
@@ -68,7 +67,7 @@ def lstm(input_dim=1):
     return model
 
 
-def multi_lstm():
+def multi_lstm(lr=0.01):   # keras default is lr=0.001, but runs better at 0.01
     
     data_dim = 1
     output_dim = 1
@@ -86,9 +85,10 @@ def multi_lstm():
     main_output = Dense(1, name='main_output')(x)
     
     model = Model(inputs=[cfgs_input, lcs_input], outputs=[main_output])
-    
+
+    adam = optimizers.Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
     model.compile(loss='mean_squared_error',
-                  optimizer='rmsprop',
+                  optimizer=adam,
                   metrics=['mse'])
     return model
 
@@ -114,57 +114,58 @@ def eval_mlp(model, configs, Y, split, batch_size):
     
     mse = model.evaluate(configs_val, y_val, batch_size=batch_size)
     print("mse: ", mse)
-    
     return mse        
 
 
-def train_lstm(model, lcs, Y, split, batch_size, epochs):
-   
-    x_train, x_val = lcs[:split], lcs[split:]
-    y_train, y_val = Y[:split], Y[split:]
+def train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None):
 
-    hist = model.fit(x_train, y_train,
-                     batch_size=batch_size, epochs=epochs,
-                     validation_data=(x_val, y_val))
+    train_idx, val_idx = idx[0], idx[1]
+    train_steps, val_steps = steps[0], steps[1]
+    
+    if not type(X) is list:                         # X is not tuple --> simple lstm without configs
+        print("train lstm without consideration of configs")
+        X_train = X[train_idx][:,:train_steps]      # select along kfolds "train" idx, cut after steps[0]
+        X_val = X[val_idx][:,:val_steps]            # truncate after steps[1]        
+        
+    else:                                           # X is tuple (configs,lcs)
+        print("train lstm with consideration of configs")
+        configs, lcs = X[0], X[1]
+        lcs_train = lcs[train_idx][:,:train_steps]   # idx tuple of arrays (idx_train, idx_val) of folds
+        lcs_val   = lcs[val_idx][:,:val_steps]       # steps tuple timesteps during training / validation
+        X_train   = [configs[train_idx], lcs_train]   
+        X_val     = [configs[val_idx], lcs_val]     
+
+    hist = model.fit(X_train, Y[train_idx],       # model.fit() takes tuple [configs, lcs]
+                     batch_size=batch_size, 
+                     epochs=epochs, 
+                     callbacks=callbacks,
+                     validation_data=(X_val, Y[val_idx]))    
     return hist
 
-    
+# taking train/valid split point as parameter for manual experiments
+def train_lstm_split(model, X, Y, steps=(10,10), split=200, batch_size=20, epochs=3):
+    idx = (np.arange(0,split), np.arange(split,Y.shape[0]))
+    return train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None)
 
-def eval_lstm(model, lcs, Y, split, batch_size):
-    
-    x_train, x_val = lcs[:split], lcs[split:]
-    y_train, y_val = Y[:split], Y[split:]              
-    
-    score, mse = model.evaluate(x_val, y_val, batch_size=batch_size)
-    print("mse: ", mse)
-    
+
+def eval_lstm_split(model, X, Y, steps, split, batch_size):
+    idx = np.arange(split,Y.shape[0])               # taking all data after split for valuation
+    if not type(X) is list:                         # simple lstm without configs
+        print("evaluate lstm without consideration of configs")
+        # X_train = X[train_idx][:,:train_steps]      # select along kfolds "train" idx, cut after steps[0]
+        X_val = X[idx][:,:steps]            # truncate after steps[1]        
+        
+    else:                                           # X is tuple (configs,lcs)
+        print("evaluate lstm with consideration of configs")
+        configs, lcs = X[0], X[1]
+        lcs_val   = lcs[idx][:,:steps]       # steps tuple timesteps during training / validation
+        X_val     = [configs[idx], lcs_val]     
+
+    score, mse = model.evaluate(X_val, Y[idx], batch_size=batch_size)      
+                          
+    print("mse: ", mse)  
     return mse    
     
-    
-def train_multi_lstm(model, configs, lcs, Y, split, batch_size, epochs):
-    # lcs, Y = t.shape_lstm_data(lcs, Y, timesteps)
-    
-    x_train, x_val = lcs[:split], lcs[split:]
-    y_train, y_val = Y[:split], Y[split:]
-    configs_train, configs_val = configs[:split], configs[split:]
-    # print(x_train.shape, x_val.shape, configs_train.shape, configs_val.shape, y_train.shape, y_val.shape)    
-
-    hist = model.fit([configs_train, x_train], y_train,
-                     batch_size=batch_size, epochs=epochs,
-                     validation_data=([configs_val, x_val], y_val))
-    return hist
-
-
-def eval_multi_lstm(model, configs, lcs, Y, split, batch_size):
-    x_train, x_val = lcs[:split], lcs[split:]
-    y_train, y_val = Y[:split], Y[split:]
-    configs_train, configs_val = configs[:split], configs[split:]    
-   
-    score, mse = model.evaluate([configs_val, x_val], y_val,
-                                batch_size=5)
-    
-    return mse
-
 
 def exp_decay(epoch, lr, k_exp=1):
     
@@ -240,10 +241,11 @@ def get_estimator(model_type, X = None, epochs = 20, cfg = {}, **kwargs):
 
 
 # create and train model and evaluate by cross validation
-def eval_cv(model_type, X, Y, cfg, epochs=0, splits = 3, 
+def eval_cv(model_type, X, Y, steps=(5,5), cfg={}, epochs=0, splits=3, 
             lr_exp_decay=False, earlystop=False, dropout=False, L1L2=False):
     
-    print("cross validate {} epochs, with config {}".format(epochs,cfg))
+    print("cross validate {} epochs, train on {} steps, validate on {} steps".format(epochs, steps[0], steps[1]))
+    print("config {}".format(cfg))
 
     callbacks = []
     if earlystop==True:
@@ -255,27 +257,30 @@ def eval_cv(model_type, X, Y, cfg, epochs=0, splits = 3,
         callbacks.append(lrate)
         print("evaluating with exponential decay")
 
-    kfold = KFold(n_splits=splits, random_state=t.seed)        
+    kfold = KFold(n_splits=splits, random_state=t.seed)
 
-    # work-around with own cross validation, as cross_val_score does not accept multiple inputs        
-    if model_type == 'multi_lstm':
+    # work-around with own cross validation, as cross_val_score does not accept multiple inputs   
+    results=[]
+
+    if model_type == 'lstm' or model_type == 'multi_lstm':
+
+        if model_type == 'lstm':   
+            model = lstm()
+        else:   
+            model = multi_lstm()
+        Wsave = model.get_weights()
         
-        model = multi_lstm()
-        results=[]
-        
-        # in case of multi_lstm X is a tuple [configs, lcs]
-        for train, val in k_fold.split(X[0]):
+        for train_idx, val_idx in kfold.split(Y):
+            model.set_weights(Wsave)
             
-            hist = model.fit([X[0][train], X[1][train]], Y[train],
-                             batch_size=cfg['batch_size'], 
-                             epochs=epochs, 
-                             callbacks=callbacks,
-                             validation_data=([X[0][val], X[1][val]], Y[val]))
-            
+            hist = train_lstm(model, X, Y, steps=steps, 
+                              idx=(train_idx, val_idx), 
+                              batch_size=cfg['batch_size'], 
+                              epochs=epochs, 
+                              callbacks=callbacks)            
+
             results.append(hist.history['val_mean_squared_error'][-1])
             
-        results = np.array(results)
-        
     else:
 
         fit_params = {}        
@@ -287,7 +292,7 @@ def eval_cv(model_type, X, Y, cfg, epochs=0, splits = 3,
         # enforce MSE as scoring, to get comparable results for different models 
         results = cross_val_score(estimator, X, Y, cv=kfold, scoring='neg_mean_squared_error', verbose=1,
                                   fit_params=fit_params)
-        
+    results = np.array(results)        
     print("MSE {}: mean *** {:.5f} *** std: {:.4f}".format(model_type, abs(results.mean()), results.std()))
     print("Result of all Folds: {}".format(np.round(results,4)))
     
