@@ -4,7 +4,7 @@ import time
 import keras.backend as K
 from keras import optimizers
 from keras.models import Model, Sequential
-from keras.layers import Input, Dense, Dropout, LSTM, concatenate
+from keras.layers import Input, Dense, Dropout, LSTM, concatenate, Masking
 from keras.regularizers import l1_l2
 from keras.callbacks import EarlyStopping, LearningRateScheduler, Callback
 from keras.wrappers.scikit_learn import KerasRegressor
@@ -53,6 +53,8 @@ def lstm(input_dim=1):
     output_dim = 1
     
     model = Sequential()
+    # masking triggers LSTM to skip all timesteps with value = mask_value (for variable length input)
+    model.add(Masking(mask_value=0., input_shape=(None, 1)))    # (timesteps / features)
     model.add(LSTM(64, return_sequences=True,
                    # input shape = (steps, data_dim) - but steps can be None for flexible use
                    input_shape=(None, data_dim)))  # returns a sequence of vectors of dimension 32
@@ -87,7 +89,7 @@ def multi_lstm(lr=0.01):   # keras default is lr=0.001, but runs better at 0.01
     model = Model(inputs=[cfgs_input, lcs_input], outputs=[main_output])
 
     adam = optimizers.Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
-    model.compile(loss='mean_squared_error',
+    model.compile(loss='mse',
                   optimizer=adam,
                   metrics=['mse'])
     return model
@@ -117,42 +119,86 @@ def eval_mlp(model, configs, Y, split, batch_size):
     return mse        
 
 
-def train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None):
+def truncate_lcs(lcs, steps):
+    
+    if steps != 0:                         # truncate lenght of training sequences to given value     
+        lcs = lcs[:,:steps]         
+    else:                                         # truncate train seqs randomly by masking
+        seq_lens = np.random.randint(low=5, high=21, size=lcs.shape[0])
+        for i in range(lcs.shape[0]):
+            lcs[i][seq_lens[i]:] = 0        # mask all values after end of seqeunce with 0    
+            
+    return lcs
+    
 
+def generate_seqs(X, Y, train_steps, train_idx, batch_size):
+    
+    while 1:
+
+        y_train = Y[train_idx]
+
+        if not type(X) is list:                         # X is not tuple --> simple lstm without configs    
+            lcs_train = X[train_idx]                    # select samples according to index array
+            x_train = truncate_lcs(lcs_train, train_steps)
+            for i in range(0, y_train.shape[0], batch_size):
+                yield (x_train[i : i+batch_size], y_train[i : i+batch_size])              
+        else:                                           # X is tuple (configs,lcs)                
+            configs_train = X[0][train_idx]
+            lcs_train     = X[1][train_idx]
+            trunc_lcs     = truncate_lcs(lcs_train, train_steps)
+            # x_train = [configs_train, trunc_lcs]
+            
+            for i in range(0, y_train.shape[0], batch_size):
+                yield ([configs_train[i : i+batch_size], trunc_lcs[i : i+batch_size]], y_train[i : i+batch_size])                     
+
+
+def _train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None):
+
+    if steps[0]!=0:
+        print("train considering", steps[0], "epochs, evaluate with", steps[1], "epochs")
+    else:
+        print("train with random nr. of epochs, evaluate with", steps[1], "epochs")
+        
     train_idx, val_idx = idx[0], idx[1]
     train_steps, val_steps = steps[0], steps[1]
     
-    if not type(X) is list:                         # X is not tuple --> simple lstm without configs
-        print("train lstm without consideration of configs")
-        X_train = X[train_idx][:,:train_steps]      # select along kfolds "train" idx, cut after steps[0]
-        X_val = X[val_idx][:,:val_steps]            # truncate after steps[1]        
+    # training data by generator, to handle random lenghts via masking
+    train_generator = generate_seqs(X, Y, train_steps, train_idx, batch_size)        
+    val_generator = generate_seqs(X, Y, val_steps, val_idx, batch_size)        
+    
+    ####### currently not used, validation data also by generator ###############
+    # validation data as arrays, no random lenghts needed
+    #if not type(X) is list:                         # X is not tuple --> simple lstm without configs
+    #    print("train lstm without consideration of configs")
+    #    x_val = X[val_idx][:,:val_steps]            # truncate after given val_steps 
+    #else:                                           # X is tuple (configs,lcs)
+    #    print("train lstm with consideration of configs")
+    #    x_val     = [X[0][val_idx], X[1][val_idx][:,:val_steps]]     
+    #y_val = Y[val_idx]        
+    ###############################################
         
-    else:                                           # X is tuple (configs,lcs)
-        print("train lstm with consideration of configs")
-        configs, lcs = X[0], X[1]
-        lcs_train = lcs[train_idx][:,:train_steps]   # idx tuple of arrays (idx_train, idx_val) of folds
-        lcs_val   = lcs[val_idx][:,:val_steps]       # steps tuple timesteps during training / validation
-        X_train   = [configs[train_idx], lcs_train]   
-        X_val     = [configs[val_idx], lcs_val]     
-
-    hist = model.fit(X_train, Y[train_idx],       # model.fit() takes tuple [configs, lcs]
-                     batch_size=batch_size, 
-                     epochs=epochs, 
-                     callbacks=callbacks,
-                     validation_data=(X_val, Y[val_idx]))    
+    hist = model.fit_generator(train_generator,
+                               steps_per_epoch = int(np.ceil(train_idx.shape[0] / batch_size)), 
+                               epochs=epochs, 
+                               callbacks=callbacks,
+                               # validation_data=(x_val, y_val),
+                               validation_data = val_generator,
+                               validation_steps = int(np.ceil(val_idx.shape[0] / batch_size)), 
+                               verbose = 1)
     return hist
 
 # taking train/valid split point as parameter for manual experiments
-def train_lstm_split(model, X, Y, steps=(10,10), split=200, batch_size=20, epochs=3):
+# steps tuple (training-timesteps , validation-timesteps), train-steps == 0 --> random length
+def train_lstm(model, X, Y, steps=(10,10), split=200, batch_size=20, epochs=3):
     idx = (np.arange(0,split), np.arange(split,Y.shape[0]))
-    return train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None)
+    return _train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None)
 
 
-def eval_lstm_split(model, X, Y, steps, split, batch_size):
+def eval_lstm(model, X, Y, steps, split, batch_size):
+    
     idx = np.arange(split,Y.shape[0])               # taking all data after split for valuation
     if not type(X) is list:                         # simple lstm without configs
         print("evaluate lstm without consideration of configs")
-        # X_train = X[train_idx][:,:train_steps]      # select along kfolds "train" idx, cut after steps[0]
         X_val = X[idx][:,:steps]            # truncate after steps[1]        
         
     else:                                           # X is tuple (configs,lcs)
@@ -259,9 +305,8 @@ def eval_cv(model_type, X, Y, steps=(5,5), cfg={}, epochs=0, splits=3,
 
     kfold = KFold(n_splits=splits, random_state=t.seed)
 
-    # work-around with own cross validation, as cross_val_score does not accept multiple inputs   
+    # work around with own cross validation, as cross_val_score does not accept multiple inputs   
     results=[]
-
     if model_type == 'lstm' or model_type == 'multi_lstm':
 
         if model_type == 'lstm':   
@@ -273,11 +318,11 @@ def eval_cv(model_type, X, Y, steps=(5,5), cfg={}, epochs=0, splits=3,
         for train_idx, val_idx in kfold.split(Y):
             model.set_weights(Wsave)
             
-            hist = train_lstm(model, X, Y, steps=steps, 
-                              idx=(train_idx, val_idx), 
-                              batch_size=cfg['batch_size'], 
-                              epochs=epochs, 
-                              callbacks=callbacks)            
+            hist = _train_lstm(model, X, Y, steps=steps, 
+                               idx=(train_idx, val_idx), 
+                               batch_size=cfg['batch_size'], 
+                               epochs=epochs, 
+                               callbacks=callbacks)            
 
             results.append(hist.history['val_mean_squared_error'][-1])
             
