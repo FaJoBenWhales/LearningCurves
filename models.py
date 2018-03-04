@@ -50,8 +50,6 @@ def lstm(input_dim=1):
     print("build lstm with input_dim:", input_dim)
     data_dim = input_dim      # features of input data
     
-    output_dim = 1
-    
     model = Sequential()
     # masking triggers LSTM to skip all timesteps with value = mask_value (for variable length input)
     model.add(Masking(mask_value=0., input_shape=(None, 1)))    # (timesteps / features)
@@ -71,17 +69,18 @@ def lstm(input_dim=1):
 
 def multi_lstm(lr=0.01):   # keras default is lr=0.001, but runs better at 0.01
     
-    data_dim = 1
-    output_dim = 1
-    
-    lcs_input = Input(shape=(None, data_dim), name='lcs_input')
+    # lstm branch of model, using masking for random values
+    lcs_input = Input(shape=(None, 1), name='lcs_input')
+    # masking = Masking(mask_value=0., input_shape=(None, 1))(lcs_input)    # input (timesteps / features)
+    masking = Masking(mask_value=0.)(lcs_input)    # input (timesteps / features)
 
-    lstm_out = LSTM(64, return_sequences=True)(lcs_input)
+    lstm_out = LSTM(64, return_sequences=True)(masking)
     lstm_out = LSTM(64)(lstm_out)
 
+    # branch for non sequential configuration data
     cfgs_input = Input(shape=(5,), name='cfgs_input')
-    x = concatenate([cfgs_input, lstm_out])    
     
+    x = concatenate([cfgs_input, lstm_out])    
     x = Dense(64)(x)
     x = Dense(64)(x)
     main_output = Dense(1, name='main_output')(x)
@@ -119,41 +118,41 @@ def eval_mlp(model, configs, Y, split, batch_size):
     return mse        
 
 
-def truncate_lcs(lcs, steps):
-    
-    if steps != 0:                         # truncate lenght of training sequences to given value     
-        lcs = lcs[:,:steps]         
-    else:                                         # truncate train seqs randomly by masking
-        seq_lens = np.random.randint(low=5, high=21, size=lcs.shape[0])
-        for i in range(lcs.shape[0]):
-            lcs[i][seq_lens[i]:] = 0        # mask all values after end of seqeunce with 0    
-            
-    return lcs
-    
-
-def generate_seqs(X, Y, train_steps, train_idx, batch_size):
-    
-    while 1:
-
-        y_train = Y[train_idx]
-
-        if not type(X) is list:                         # X is not tuple --> simple lstm without configs    
-            lcs_train = X[train_idx]                    # select samples according to index array
-            x_train = truncate_lcs(lcs_train, train_steps)
-            for i in range(0, y_train.shape[0], batch_size):
-                yield (x_train[i : i+batch_size], y_train[i : i+batch_size])              
-        else:                                           # X is tuple (configs,lcs)                
-            configs_train = X[0][train_idx]
-            lcs_train     = X[1][train_idx]
-            trunc_lcs     = truncate_lcs(lcs_train, train_steps)
-            # x_train = [configs_train, trunc_lcs]
-            
-            for i in range(0, y_train.shape[0], batch_size):
-                yield ([configs_train[i : i+batch_size], trunc_lcs[i : i+batch_size]], y_train[i : i+batch_size])                     
-
-
 def _train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None):
 
+    def truncate_lcs(lcs, steps):
+
+        if steps != 0:                         # truncate lenght of training sequences to given value     
+            lcs = lcs[:,:steps]         
+        else:                                         # truncate train seqs randomly by masking
+            seq_lens = np.random.randint(low=5, high=21, size=lcs.shape[0])
+            for i in range(lcs.shape[0]):
+                lcs[i][seq_lens[i]:] = 0        # mask all values after end of seqeunce with 0    
+
+        return lcs
+
+    # generator for sequences for fit_generator()
+    def generate_seqs(X, Y, train_steps, train_idx, batch_size):
+
+        while 1:
+
+            y_train = Y[train_idx]
+
+            if not type(X) is list:                         # X is not tuple --> simple lstm without configs    
+                lcs_train = X[train_idx]                    # select samples according to index array
+                x_train = truncate_lcs(lcs_train, train_steps)
+                for i in range(0, y_train.shape[0], batch_size):
+                    yield (x_train[i : i+batch_size], y_train[i : i+batch_size])              
+            else:                                           # X is tuple (configs,lcs)                
+                configs_train = X[0][train_idx]
+                lcs_train     = X[1][train_idx]
+                trunc_lcs     = truncate_lcs(lcs_train, train_steps)
+                # x_train = [configs_train, trunc_lcs]
+
+                for i in range(0, y_train.shape[0], batch_size):
+                    yield ([configs_train[i : i+batch_size], trunc_lcs[i : i+batch_size]], y_train[i : i+batch_size])      
+
+                    
     if steps[0]!=0:
         print("train considering", steps[0], "epochs, evaluate with", steps[1], "epochs")
     else:
@@ -165,23 +164,11 @@ def _train_lstm(model, X, Y, steps, idx, batch_size, epochs, callbacks = None):
     # training data by generator, to handle random lenghts via masking
     train_generator = generate_seqs(X, Y, train_steps, train_idx, batch_size)        
     val_generator = generate_seqs(X, Y, val_steps, val_idx, batch_size)        
-    
-    ####### currently not used, validation data also by generator ###############
-    # validation data as arrays, no random lenghts needed
-    #if not type(X) is list:                         # X is not tuple --> simple lstm without configs
-    #    print("train lstm without consideration of configs")
-    #    x_val = X[val_idx][:,:val_steps]            # truncate after given val_steps 
-    #else:                                           # X is tuple (configs,lcs)
-    #    print("train lstm with consideration of configs")
-    #    x_val     = [X[0][val_idx], X[1][val_idx][:,:val_steps]]     
-    #y_val = Y[val_idx]        
-    ###############################################
         
     hist = model.fit_generator(train_generator,
                                steps_per_epoch = int(np.ceil(train_idx.shape[0] / batch_size)), 
                                epochs=epochs, 
                                callbacks=callbacks,
-                               # validation_data=(x_val, y_val),
                                validation_data = val_generator,
                                validation_steps = int(np.ceil(val_idx.shape[0] / batch_size)), 
                                verbose = 1)
@@ -295,7 +282,8 @@ def eval_cv(model_type, X, Y, steps=(5,5), cfg={}, epochs=0, splits=3,
 
     callbacks = []
     if earlystop==True:
-        callbacks.append(EarlyStopping(monitor='loss', min_delta=0.0001, patience=100, verbose=1, mode='auto'))
+        callbacks.append(EarlyStopping(monitor='loss', min_delta=0.0001, patience=epochs/10, 
+                                       verbose=1, mode='auto'))
         print("evaluating with early stopping")
 
     if lr_exp_decay==True:
