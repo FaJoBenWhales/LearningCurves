@@ -14,6 +14,100 @@ import xgboost as xgb
 
 import tools as t
 
+# stores weights of best values and restore these after training --> not done by default by earlystop !! 
+# modified keras ModelCheckpoint class see https://github.com/keras-team/keras/issues/2768 code user louis925
+# enhanced with "reset" parameter
+import warnings
+class GetBest(Callback):
+    """Get the best model at the end of training.
+    # Arguments
+        monitor: quantity to monitor.
+        verbose: verbosity mode, 0 or 1.
+        mode: one of {auto, min, max}.
+            The decision
+            to overwrite the current stored weights is made
+            based on either the maximization or the
+            minimization of the monitored quantity. For `val_acc`,
+            this should be `max`, for `val_loss` this should
+            be `min`, etc. In `auto` mode, the direction is
+            automatically inferred from the name of the monitored quantity.
+        period: Interval (number of epochs) between checkpoints.
+    # Example
+        callbacks = [GetBest(monitor='val_acc', verbose=1, mode='max')]
+        mode.fit(X, y, validation_data=(X_eval, Y_eval),
+                 callbacks=callbacks)
+    """
+    # reset best found value at beginning of each new training
+    def __init__(self, monitor='val_loss', verbose=0,
+                 mode='auto', period=1, reset = True):
+        super(GetBest, self).__init__()
+        self.monitor = monitor
+        self.verbose = verbose
+        self.period = period
+        self.reset = reset
+        self.best_epochs = 0
+        self.epochs_since_last_save = 0
+
+        if mode not in ['auto', 'min', 'max']:
+            warnings.warn('GetBest mode %s is unknown, '
+                          'fallback to auto mode.' % (mode),
+                          RuntimeWarning)
+            mode = 'auto'
+
+        if mode == 'min':
+            self.monitor_op = np.less
+            self.best = np.Inf
+        elif mode == 'max':
+            self.monitor_op = np.greater
+            self.best = -np.Inf
+        else:
+            if 'acc' in self.monitor or self.monitor.startswith('fmeasure'):
+                print("choose max as mode")
+                self.monitor_op = np.greater
+                self.best = -np.Inf
+            else:
+                print("choose min as mode")                
+                self.monitor_op = np.less
+                self.best = np.Inf
+                
+    def on_train_begin(self, logs=None):
+        if self.reset == True:      # useful if multiple calls of fit(), e.g. during cross validation 
+            self.best = np.Inf if self.monitor_op == np.less else -np.Inf
+        self.best_weights = self.model.get_weights()
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        self.epochs_since_last_save += 1
+        if self.epochs_since_last_save >= self.period:
+            self.epochs_since_last_save = 0
+            #filepath = self.filepath.format(epoch=epoch + 1, **logs)
+            current = logs.get(self.monitor)
+            if current is None:
+                warnings.warn('Can pick best model only with %s available, '
+                              'skipping.' % (self.monitor), RuntimeWarning)
+            else:
+                if self.monitor_op(current, self.best):
+                    if self.verbose > 0:
+                        print('\nEpoch %05d: %s improved from %0.5f to %0.5f,'
+                              ' storing weights.'
+                              % (epoch + 1, self.monitor, self.best,
+                                 current))
+                    self.best = current
+                    self.best_epochs = epoch + 1
+                    self.best_weights = self.model.get_weights()
+                else:
+                    if self.verbose > 0:
+                        print('\nEpoch %05d: %s is %0.5f, did not improve' %
+                              (epoch + 1, self.monitor, current))            
+                    
+    def on_train_end(self, logs=None):
+        if self.verbose > 0:
+            print('Using epoch %05d with %s: %0.5f' % (self.best_epochs, self.monitor,
+                                                       self.best))
+        self.model.set_weights(self.best_weights)
+
+
+
 # passing a dictionary (cfg) to mlp triggers a deprecation warning - passing simple parameters does not (??)
 def mlp(lr=None, dropout=False, L1L2=False):
     
@@ -184,7 +278,7 @@ def _train_lstm(model, X, steps, idx, batch_size, epochs, callbacks = None, mode
                                callbacks=callbacks,
                                validation_data = val_generator,
                                validation_steps = int(np.ceil(val_idx.shape[0] / batch_size)), 
-                               verbose = 1)
+                               verbose = 0)
     return hist
 
 
@@ -199,11 +293,8 @@ def train_lstm(model, X, steps=(10,10), split=200, batch_size=20, epochs=3, mode
     else: 
         print("unknown mode", mode)
         
-
-def eval_lstm(model, X, steps, split, batch_size, mode = 'nextstep'):
-
-    sample_no = (X[0] if type(X) == list else X).shape[0]
-    idx = np.arange(split,sample_no)               # taking all data after split for valuation
+# evaluation on next (mode='nextstep') or on final (mode='finalstep') step
+def _eval_lstm(model, X, steps, idx, batch_size, mode = 'nextstep'):
 
     if not type(X) is list:                         # simple lstm without configs
         print("evaluate lstm without consideration of configs")
@@ -218,13 +309,17 @@ def eval_lstm(model, X, steps, split, batch_size, mode = 'nextstep'):
         Y_val     = lcs[idx][:,-1] if mode == 'finalstep' else lcs[idx][:,steps]  
 
     score, mse = model.evaluate(X_val, Y_val, batch_size=batch_size) 
-    nextsteps = model.predict(X_val, batch_size=batch_size)
-    for i in range(10):
-        k = i
-        # print("lcs", lcs_val[k], "\nY_val", Y_val[k], "nextsteps", nextsteps[k])    
                           
     print("mse: ", mse)  
     return mse    
+        
+        
+def eval_lstm(model, X, steps, split, batch_size, mode = 'nextstep'):
+
+    sample_no = (X[0] if type(X) == list else X).shape[0]
+    idx = np.arange(split,sample_no)               # taking all data after split for valuation
+    
+    return(_eval_lstm(model, X, steps, idx, batch_size, mode = 'nextstep'))    
 
 
 def _pred_finalpoints(model, X, steps, idx, batch_size=20):
@@ -337,17 +432,24 @@ def get_estimator(model_type, X = None, epochs = 20, cfg = {}, **kwargs):
 
 
 # create and train model and evaluate by cross validation
-def eval_cv(model_type, X, Y, steps=(5,5), cfg={}, epochs=0, splits=3, 
-            lr_exp_decay=False, earlystop=False, dropout=False, L1L2=False, mode='nextstep'):
+# steps = (training steps, lsit of validation steps) e.g. (10,[5,10,20,30])
+def eval_cv(model_type, X, Y, steps=(5,[5]), cfg={}, epochs=0, splits=3, 
+            lr_exp_decay=False, earlystop=False, dropout=False, L1L2=False, 
+            mode='nextstep'):
     
     print("cross validate {} epochs, train on {} steps, validate on {} steps".format(epochs, steps[0], steps[1]))
     print("config {}".format(cfg))
 
     callbacks = []
     if earlystop==True:
-        callbacks.append(EarlyStopping(monitor='loss', min_delta=0.0001, 
-                                       patience=np.amax([epochs/10, 5]), 
+        monitor = 'val_loss' if model_type == 'lstm' or model_type == 'multi_lstm' else 'loss'
+         #callbacks.append(EarlyStopping(monitor='loss', min_delta=0.0001, 
+        callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.0001,                                        
+                                       patience=np.amin([np.amax([epochs/10, 5]),75]), 
                                        verbose=1, mode='auto'))
+        # save weights at best iteration, and restore at end of training
+        # takes best iteration of all CV-folds
+        callbacks.append(GetBest(monitor=monitor, verbose=1, mode='auto', reset = True))
         print("evaluating with early stopping")
 
     if lr_exp_decay==True:
@@ -361,34 +463,47 @@ def eval_cv(model_type, X, Y, steps=(5,5), cfg={}, epochs=0, splits=3,
     results_val=[]      # generally work only on validation data...
     results_train=[]    # ... but for task with 'nextstep' also on training data
 
-    if model_type == 'lstm' or model_type == 'multi_lstm':
-
+    if model_type == 'lstm' or model_type == 'multi_lstm':  # own implementation of cross validation
+    
         model = lstm() if model_type == 'lstm' else multi_lstm()
         Wsave = model.get_weights()
         
+        fold_count = 0
         for train_idx, val_idx in kfold.split(Y):
+            fold_count += 1
+            # faster solution: train once, evaluate over all cases [5,10,20,30]
             model.set_weights(Wsave)     # to make results reproducible always start with same init weights
-            print("steps", steps)
-            hist = _train_lstm(model, X, steps=steps, 
+            print("train fold {} on {} steps, validation on {} steps".format(fold_count, steps[0], steps[0]))
+            # steps[1] for validation here only relevant as criterion for early stopping
+            hist = _train_lstm(model, X, steps=(steps[0], steps[0]), 
                                idx=(train_idx, val_idx), 
                                batch_size=cfg['batch_size'], 
                                epochs=epochs, 
                                callbacks=callbacks,
                                mode=mode)
             
-            if mode == 'finalstep':
-                mse_val = hist.history['val_mean_squared_error'][-1]
-            elif mode == 'nextstep':
-                mse_val   = _pred_finalpoints(model, X, steps[1], val_idx,   batch_size=20)
-                train_steps = steps[0] if steps[0]!=0 else steps[1]
-                mse_train = _pred_finalpoints(model, X, train_steps, train_idx, batch_size=20)                
-                results_train.append(mse_train)
-            else:
-                print("invalid mode", mode)
-                
-            results_val.append(mse_val)
+            # now model has weights of best run during last training (based on val_loss)
+            # now evaluate on train and valid data of given steps [5,10,20,30]
+            train_mses, val_mses = [], [] 
+            for val_steps in steps[1]:
 
-    else:
+                if mode == 'finalstep':
+                    val_mses.append(_eval_lstm(model, X, val_steps, val_idx, cfg['batch_size'], mode = 'finalstep'))
+                    train_mses.append(_eval_lstm(model, X, val_steps, train_idx, cfg['batch_size'], mode = 'finalstep'))                  
+                elif mode == 'nextstep':
+                    val_mses.append(_pred_finalpoints(model, X, val_steps, val_idx, batch_size=cfg['batch_size']))
+                    train_mses.append(_pred_finalpoints(model, X, val_steps, train_idx, batch_size=cfg['batch_size']))
+                else:
+                    print("invalid mode", mode)
+                    
+                print("validate on {} steps, mse on train / validation data: {:.5f} / {:.5f}"\
+                      .format(val_steps, train_mses[-1], val_mses[-1]))
+
+                
+            results_val.append(val_mses)
+            results_train.append(train_mses)                        
+
+    else:     # for mlp, xgb, ridge etc. use skikitlearn cross_val_score()
 
         fit_params = {}        
         if model_type == 'mlp':
@@ -401,14 +516,13 @@ def eval_cv(model_type, X, Y, steps=(5,5), cfg={}, epochs=0, splits=3,
                                   fit_params=fit_params)
         
     results_val, results_train = np.array(results_val), np.array(results_train)
-    print("MSE validation {}: mean *** {:.5f} *** std: {:.4f}"\
-          .format(model_type, abs(results_val.mean()), results_val.std()))
-    print("Validation results of all Folds: {}".format(np.round(results_val,4)))
+    print("MSE on validation data on {} steps: means over folds: *** {} ***"\
+          .format(steps[1], abs(np.round(results_val.mean(axis=0),5))))
+    print("Results validation data of all Folds: \n{}".format(np.round(results_val,5)))
     
-    if mode == 'nextstep':
-        print("\nMSE training {}: mean *** {:.5f} *** std: {:.4f}"\
-              .format(model_type, abs(results_train.mean()), results_train.std()))
-        print("Training result of all Folds: {}".format(np.round(results_train,4)))
+    if results_train.shape[0] > 0:
+        print("MSE on training data on {} steps: means over folds: *** {} ***"\
+              .format(steps[1], abs(np.round(results_train.mean(axis=0),5))))
+        print("Results training data of all Folds: \n{}".format(np.round(results_train,5)))
     
-    
-    return results_val.mean(), results_train.mean()
+    return results_train.mean(axis=0), results_val.mean(axis=0) 
