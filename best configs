@@ -70,7 +70,24 @@ Epoch 00606: early stopping
 MSE mlp: mean *** 0.00965 *** std: 0.0015
 
 
-evaluating with early stopping
 call cross_val_score 2000 epochs, with config {'lr': 0.01033500230671202, 'batch_size': 24}
 MSE mlp: mean *** 0.00653 *** std: 0.0004
+
+******** best result mlp : Hyberband run on mlp results ******
+
+{'lr': 0.37364476899503524, 'batch_size': 48}
+
+Eval_cv with this config with earlystopping:
+MSE on validation data on [5] steps: means over folds: *** [ 0.00547] ***
+Results validation data of all Folds: 
+[[ 0.00617]
+ [ 0.00533]
+ [ 0.0049 ]]
+
+
+******************** multi lstm *******************************
+hyperband using mode = 'next_step' yields:
+best config:  {'batch_size': 21, 'lr': 0.023123758972112808}
+
+
 

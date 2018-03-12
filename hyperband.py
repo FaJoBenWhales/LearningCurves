@@ -131,14 +131,14 @@ def get_keras_config_space(model_type, lr_exp_decay=False):
             ]
         else:
             hpRaw = [
-                ['lr',                       [0.0001, 0.5],     0.05,          True,    'float'],
+                ['lr',                       [0.001, 0.5],     0.05,          True,    'float'],
                 ['batch_size',               [16, 64],           32,           True,    'int'],
             ] 
  
     elif model_type == 'lstm' or model_type == 'multi_lstm':
         hpRaw = [
-            # ['lr',                       [0.0001, 0.5],     0.05,          True,    'float'],
-            ['batch_size',                   [1, 10],           10,           True,    'int'],
+            ['lr',                           [0.001, 0.5],     0.05,           True,    'float'],
+            ['batch_size',                   [16, 48],           24,           True,    'int'],
         ] 
 
     else:
@@ -158,14 +158,17 @@ def objective_crossval(X, Y, config, epochs, model_type, regul, save_data_path="
     
     start_time = time.time()
 
-    results = m.eval_cv(model_type, X, Y, cfg=config, epochs=epochs, splits = 3,
-                        lr_exp_decay=regul['lr_exp_decay'], earlystop=regul['earlystop'], 
-                        dropout=regul['dropout'], L1L2=regul['L1L2'])
-
+    _, results  = m.eval_cv(model_type, X, Y, cfg=config, epochs=epochs, splits = 3,
+                                       lr_exp_decay=regul['lr_exp_decay'], earlystop=regul['earlystop'], 
+                                       dropout=regul['dropout'], L1L2=regul['L1L2'], mode='nextstep')
+    results = abs(results.mean())    # in some cases eval_cv returns an array
+    print("hyperband obj crossval results", results)
     runtime = time.time() - start_time
     histories = [1,2,3]   # dummy for history
     
-    return -results.mean(), runtime, histories
+    return results, runtime, histories
+
+    # return -results, runtime, histories
 
 
 class WorkerWrapper(Worker):
@@ -261,13 +264,14 @@ def optimize(X,Y,
             pickle.dump(res, f)
     # save incumbent trajectory as csv
     traj = res.get_incumbent_trajectory()
+    print("traj", traj)
     incumbent_performance = traj["losses"]
     # incumbent_perf_dict = {"hyperband_incumbent_trajectory": incumbent_performance}
     
     best_cfg_id = res.get_incumbent_id()
-    # print("best_cfg_id",best_cfg_id)
+    print("best_cfg_id",best_cfg_id)
     all_configs = res.get_id2config_mapping()
-    # print("all_configs",all_configs)
+    print("all_configs",all_configs)
     
     best_cfg = all_configs[best_cfg_id]['config']
     print("return best config: ",best_cfg)

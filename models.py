@@ -1,5 +1,6 @@
 # Deep learning Theory final project
 import numpy as np
+from copy import deepcopy
 import time
 import keras.backend as K
 from keras import optimizers
@@ -107,6 +108,17 @@ class GetBest(Callback):
         self.model.set_weights(self.best_weights)
 
 
+# create model for Baseline 3.4 
+def xgb_next(cfg):
+    
+    model = xgb.XGBRegressor(n_estimators=cfg['n_estimators'], 
+                                 learning_rate = cfg['lr'], 
+                                 gamma = cfg['gamma'], 
+                                 subsample = cfg['subsample'], 
+                                 colsample_bytree = cfg['cols_bt'], 
+                                 max_depth = cfg['maxdepth'])
+    return model
+      
 
 # passing a dictionary (cfg) to mlp triggers a deprecation warning - passing simple parameters does not (??)
 def mlp(lr=None, dropout=False, L1L2=False):
@@ -186,6 +198,60 @@ def multi_lstm(lr=0.01):   # keras default is lr=0.001, but runs better at 0.01
                   optimizer=adam,
                   metrics=['mse'])
     return model
+
+
+        # nextsteps = nextsteps.reshape((lcs_trunc.shape[0], 1, 1))
+
+# train xgb to predict next step based on config and last 4 steps
+def train_xgb_next(model, X, idx):
+    
+    configs, lcs = X[0][idx], X[1][idx]
+    lcs = lcs.reshape((idx.shape[0], lcs.shape[1]))   # from (200,1,1) to (200,1)
+    
+    for lag in np.arange(0,36):
+        # print("lcs.shape[1]", lcs.shape[1])
+        lcs_next_4 = lcs[:,lag:lag+4]
+        print("train on new epoch",lag+5, "true value for curve no. 13 (example)", lcs[13,lag+4])
+        # lcs_next_4 = lcs_next_4.reshape(idx.shape[0],4)   # from (200,1,1) to (200,1)
+        # for each sample append slice of next for values to config array as input for xgb
+        # print("lcs_next_4",len(lcs_next_4))
+        # print("configs",len(configs))
+
+        next_input = np.append(configs,lcs_next_4,axis=1)
+        next_label = lcs[:,lag+4]
+        # print("next_input", next_input[13])
+        # print("next_label", next_label[13])
+        model.fit(next_input, next_label)
+
+# predict final point via successive / stepwise prediction based on config + 4 last steps
+def eval_xgb_next(model, X, val_steps, idx):
+
+    print("\neval_xgb starting at step", val_steps)
+    configs = X[0][idx] 
+    lcs     = X[1][idx]
+    lcs     = lcs.reshape((idx.shape[0], lcs.shape[1]))   # from (200,40,1) to (200,40)
+    lcs_new = deepcopy(lcs)    # will be manipulated during prediction
+    print("lcs", lcs[13])
+    
+    # go through learning-curves, replacing values stepwise with predictions based on last 4-slice
+    for lag in np.arange(val_steps-4,36):
+        lcs_next_4 = lcs_new[:,lag:lag+4]
+        # for each sample append slice of next for values to config array as input for xgb
+        next_input = np.append(configs,lcs_next_4,axis=1)
+        # print("next_input", next_input[13])        
+        next_pred = model.predict(next_input)
+        # print("next_pred", next_pred[13])
+        lcs_new[:,lag+4] = next_pred   # set next step in Learning curve with prediction
+        # print("lc number 7 with new prediction ", next_pred[7], "\n", lcs_new[7][:lag+5])
+        print("step nr.", lag+4 ,"prediction / true value for lc number 13", next_pred[13], "/", lcs[13][lag+4])
+    
+    # compare extrapolated final points with true values
+    y_pred = lcs_new[:,-1].reshape(idx.shape[0])
+    y_true = lcs[:,-1].reshape(idx.shape[0])
+    
+    mse = ((y_pred - y_true) ** 2).mean()
+    
+    return mse
 
 
 # ToDo: pass learning rate at creation of model
@@ -411,18 +477,10 @@ def get_estimator(model_type, X = None, epochs = 20, cfg = {}, **kwargs):
                                      colsample_bytree = cfg['cols_bt'], 
                                      max_depth = cfg['maxdepth'])
         
-    elif model_type == 'mlp':     
-        estimator = KerasRegressor(build_fn=mlp, lr = cfg['lr'], 
-                                   dropout=kwargs.get('dropout',False), L1L2=kwargs.get('L1L2',False),
-                                   epochs=epochs, batch_size=cfg['batch_size'], verbose=0)
-        
-    elif model_type == 'lstm':
-        estimator = KerasRegressor(build_fn=lstm, input_dim = X[0][2].shape[0], 
-                                   epochs=epochs, batch_size=cfg['batch_size'], verbose=1)
-        
-    elif model_type == 'multi_lstm':
-        estimator = KerasRegressor(build_fn=multi_lstm, epochs=epochs, 
-                                   batch_size=cfg['batch_size'], verbose=1)
+    # elif model_type == 'mlp':     
+    #    estimator = KerasRegressor(build_fn=mlp, lr = cfg['lr'], 
+    #                               dropout=kwargs.get('dropout',False), L1L2=kwargs.get('L1L2',False),
+    #                               epochs=epochs, batch_size=cfg['batch_size'], verbose=0)
               
     else:
         print("no valid estimator type: ", model_type)
@@ -442,14 +500,12 @@ def eval_cv(model_type, X, Y, steps=(5,[5]), cfg={}, epochs=0, splits=3,
 
     callbacks = []
     if earlystop==True:
-        monitor = 'val_loss' if model_type == 'lstm' or model_type == 'multi_lstm' else 'loss'
-         #callbacks.append(EarlyStopping(monitor='loss', min_delta=0.0001, 
-        callbacks.append(EarlyStopping(monitor=monitor, min_delta=0.0001,                                        
+        callbacks.append(EarlyStopping(monitor='val_loss', min_delta=0.0001,                                        
                                        patience=np.amin([np.amax([epochs/10, 5]),75]), 
                                        verbose=1, mode='auto'))
         # save weights at best iteration, and restore at end of training
-        # takes best iteration of all CV-folds
-        callbacks.append(GetBest(monitor=monitor, verbose=1, mode='auto', reset = True))
+        # reset = True --> takes best iteration for each CV-fold
+        callbacks.append(GetBest(monitor='val_loss', verbose=1, mode='auto', reset = True))
         print("evaluating with early stopping")
 
     if lr_exp_decay==True:
@@ -462,48 +518,75 @@ def eval_cv(model_type, X, Y, steps=(5,[5]), cfg={}, epochs=0, splits=3,
     # work around with own cross validation, as cross_val_score does not accept multiple inputs   
     results_val=[]      # generally work only on validation data...
     results_train=[]    # ... but for task with 'nextstep' also on training data
-
-    if model_type == 'lstm' or model_type == 'multi_lstm':  # own implementation of cross validation
     
-        model = lstm() if model_type == 'lstm' else multi_lstm()
-        Wsave = model.get_weights()
+    # own implementation of cross validation
+    if model_type in ['lstm','multi_lstm','mlp','xgb_next']:
+    # if model_type == 'lstm' or model_type == 'multi_lstm' or model_type == 'mlp' or model_type == 'xgb_next':  
+    
+        if model_type == 'lstm':
+            model = lstm()
+        elif model_type == 'multi_lstm':
+            model = multi_lstm(cfg['lr'])
+        elif model_type == 'mlp':
+            model = mlp(cfg['lr'], dropout=dropout, L1L2=L1L2)    # could pass cfg now more elegantly...
+        elif model_type == 'xgb_next':
+            model = xgb_next(cfg)
+
+        if model_type in ['lstm','multi_lstm','mlp']:
+            Wsave = model.get_weights()
         
         fold_count = 0
         for train_idx, val_idx in kfold.split(Y):
             fold_count += 1
             # faster solution: train once, evaluate over all cases [5,10,20,30]
-            model.set_weights(Wsave)     # to make results reproducible always start with same init weights
+            if model_type in ['lstm','multi_lstm','mlp']:            
+                model.set_weights(Wsave)     # to make results reproducible always start with same init weights
             print("train fold {} on {} steps, validation on {} steps".format(fold_count, steps[0], steps[0]))
             # steps[1] for validation here only relevant as criterion for early stopping
-            hist = _train_lstm(model, X, steps=(steps[0], steps[0]), 
-                               idx=(train_idx, val_idx), 
-                               batch_size=cfg['batch_size'], 
-                               epochs=epochs, 
-                               callbacks=callbacks,
-                               mode=mode)
-            
+            if model_type == 'mlp':
+                hist = model.fit(X[train_idx], Y[train_idx],
+                                 batch_size=cfg['batch_size'], 
+                                 epochs=epochs,
+                                 callbacks=callbacks,
+                                 verbose = 0, 
+                                 validation_data=(X[val_idx], Y[val_idx]))
+            elif model_type == 'xgb_next':
+                train_xgb_next(model, X,train_idx)
+            elif model_type in ['lstm','multi_lstm']:
+                hist = _train_lstm(model, X, steps=(steps[0], steps[0]), 
+                                   idx=(train_idx, val_idx), 
+                                   batch_size=cfg['batch_size'], 
+                                   epochs=epochs, 
+                                   callbacks=callbacks,
+                                   mode=mode)
+                
             # now model has weights of best run during last training (based on val_loss)
             # now evaluate on train and valid data of given steps [5,10,20,30]
             train_mses, val_mses = [], [] 
-            for val_steps in steps[1]:
+            if model_type == 'mlp':
+                val_mses.append(model.evaluate(X[val_idx], Y[val_idx], batch_size=cfg['batch_size']))
+            else:   # if lstm of xgb_next
+                for val_steps in steps[1]:
+                    if model_type == 'xgb_next':
+                        val_mses.append(eval_xgb_next(model, X, val_steps, val_idx))
+                        train_mses.append(eval_xgb_next(model, X, val_steps, train_idx))
+                    else:    
+                        if mode == 'finalstep':
+                            val_mses.append(_eval_lstm(model, X, val_steps, val_idx, cfg['batch_size'], mode = 'finalstep'))
+                            train_mses.append(_eval_lstm(model, X, val_steps, train_idx, cfg['batch_size'], mode = 'finalstep'))                  
+                        elif mode == 'nextstep':
+                            val_mses.append(_pred_finalpoints(model, X, val_steps, val_idx, batch_size=cfg['batch_size']))
+                            train_mses.append(_pred_finalpoints(model, X, val_steps, train_idx, batch_size=cfg['batch_size']))
+                        else:
+                            print("invalid mode", mode)
 
-                if mode == 'finalstep':
-                    val_mses.append(_eval_lstm(model, X, val_steps, val_idx, cfg['batch_size'], mode = 'finalstep'))
-                    train_mses.append(_eval_lstm(model, X, val_steps, train_idx, cfg['batch_size'], mode = 'finalstep'))                  
-                elif mode == 'nextstep':
-                    val_mses.append(_pred_finalpoints(model, X, val_steps, val_idx, batch_size=cfg['batch_size']))
-                    train_mses.append(_pred_finalpoints(model, X, val_steps, train_idx, batch_size=cfg['batch_size']))
-                else:
-                    print("invalid mode", mode)
-                    
                 print("validate on {} steps, mse on train / validation data: {:.5f} / {:.5f}"\
                       .format(val_steps, train_mses[-1], val_mses[-1]))
-
                 
             results_val.append(val_mses)
             results_train.append(train_mses)                        
 
-    else:     # for mlp, xgb, ridge etc. use skikitlearn cross_val_score()
+    else:     # for xgb, ridge etc. use skikitlearn cross_val_score()
 
         fit_params = {}        
         if model_type == 'mlp':
@@ -516,13 +599,14 @@ def eval_cv(model_type, X, Y, steps=(5,[5]), cfg={}, epochs=0, splits=3,
                                   fit_params=fit_params)
         
     results_val, results_train = np.array(results_val), np.array(results_train)
-    print("MSE on validation data on {} steps: means over folds: *** {} ***"\
-          .format(steps[1], abs(np.round(results_val.mean(axis=0),5))))
+    val_means, train_means = [], []
+    val_means = abs(np.round(results_val.mean(axis=0),5))
+    print("MSE on validation data on {} steps: means over folds: *** {} ***".format(steps[1], val_means))
     print("Results validation data of all Folds: \n{}".format(np.round(results_val,5)))
     
     if results_train.shape[0] > 0:
-        print("MSE on training data on {} steps: means over folds: *** {} ***"\
-              .format(steps[1], abs(np.round(results_train.mean(axis=0),5))))
+        train_means = abs(np.round(results_train.mean(axis=0),5))
+        print("MSE on train data on {} steps: means over folds: *** {} ***".format(steps[1], train_means))
         print("Results training data of all Folds: \n{}".format(np.round(results_train,5)))
     
-    return results_train.mean(axis=0), results_val.mean(axis=0) 
+    return train_means, val_means 
