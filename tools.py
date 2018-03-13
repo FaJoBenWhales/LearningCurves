@@ -9,6 +9,7 @@ import datetime
 import numpy as np
 import pandas as pd
 from sklearn import preprocessing
+import matplotlib.pyplot as plt
 
 # global variables
 seed = 42
@@ -18,6 +19,22 @@ regul = {'lr_exp_decay' : False,
          'dropout' : False, 
          'L1L2' : False}
 '''         
+
+def scatter_plot(y_true, y_pred, mse):
+
+    y_true = y_true.reshape(y_true.shape[0])
+    fig, ax = plt.subplots()
+    fit = np.polyfit(y_true, y_pred, deg=1)
+    ax.plot(y_true, fit[0] * y_true + fit[1], color='red')
+    ax.scatter(y_true, y_pred)
+    
+    plt.title("final points - mse: {:.5f}".format(mse))
+    plt.xlabel("true final points")
+    plt.ylabel("predicted final points")    
+
+    fig.show()
+
+
 
 def get_run_name(prefix="run", additional=""):
     return "_".join([prefix, 

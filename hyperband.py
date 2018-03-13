@@ -104,7 +104,7 @@ def configuration_space_from_raw(hpRaw, hpRawConditions, resolve_multiple='AND')
     return cs
 
 
-def get_keras_config_space(model_type, lr_exp_decay=False):
+def get_keras_config_space(model_type, lr_exp_decay=False, L1L2=False):
     
     if model_type == 'ridge':
         hpRaw = [
@@ -129,6 +129,13 @@ def get_keras_config_space(model_type, lr_exp_decay=False):
                 ['k_exp',                    [0.001,0.1],     0.04,           True,    'float'],
                 ['batch_size',               [16, 32],         32,            True,    'int'],            
             ]
+        elif L1L2 == True:
+            hpRaw = [
+                ['lr',                       [0.02, 0.2],     0.2,            True,    'float'],
+                ['l1',                       [0.0001,0.005],  0.001,         True,    'float'],
+                ['l2',                       [0.0001,0.005],  0.001,         True,    'float'],
+                ['batch_size',               [16, 32],         32,            True,    'int'],            
+            ]        
         else:
             hpRaw = [
                 ['lr',                       [0.001, 0.5],     0.05,          True,    'float'],
@@ -158,10 +165,11 @@ def objective_crossval(X, Y, config, epochs, model_type, regul, save_data_path="
     
     start_time = time.time()
 
-    _, results  = m.eval_cv(model_type, X, Y, cfg=config, epochs=epochs, splits = 3,
-                                       lr_exp_decay=regul['lr_exp_decay'], earlystop=regul['earlystop'], 
-                                       dropout=regul['dropout'], L1L2=regul['L1L2'], mode='nextstep')
-    results = abs(results.mean())    # in some cases eval_cv returns an array
+    results  = m.eval_cv(model_type, X, Y, cfg=config, epochs=epochs, splits = 3,
+                           lr_exp_decay=regul['lr_exp_decay'], earlystop=regul['earlystop'], 
+                           dropout=regul['dropout'], L1L2=regul['L1L2'], mode='nextstep')
+    result = abs(results['mse_total'])
+    # results = abs(results.mean())    # in some cases eval_cv returns an array
     print("hyperband obj crossval results", results)
     runtime = time.time() - start_time
     histories = [1,2,3]   # dummy for history
@@ -237,7 +245,7 @@ def optimize(X,Y,
     # , **kwargs)
     w.run(background=True)
 
-    cs = config_space_getter(model_type)
+    cs = config_space_getter(model_type, lr_exp_decay=lr_exp_decay, L1L2=L1L2)
     configuration_generator = hpbandster.config_generators.RandomSampling(cs)
 
     # instantiating Hyperband with some minimal configuration
