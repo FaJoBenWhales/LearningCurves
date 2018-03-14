@@ -5,6 +5,7 @@ import sys
 import glob
 import json
 import datetime
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -19,22 +20,92 @@ regul = {'lr_exp_decay' : False,
          'dropout' : False, 
          'L1L2' : False}
 '''         
+# res is dict as returned by m.eval_cv
+def scatter_plot(y_true, res, title):
 
-def scatter_plot(y_true, y_pred, mse):
-
+    y_pred = res['y_pred']
+    
     y_true = y_true.reshape(y_true.shape[0])
-    fig, ax = plt.subplots()
-    fit = np.polyfit(y_true, y_pred, deg=1)
-    ax.plot(y_true, fit[0] * y_true + fit[1], color='red')
+
+    fig = plt.figure(figsize=(5, 5))
+    ax = plt.subplot()    
+    
+    # fig, ax = plt.subplots()
+    # fit = np.polyfit(y_true, y_pred, deg=1)
+    # ax.plot(y_true, fit[0] * y_true + fit[1], color='red')
+    # plt.loglog(t, 20*np.exp(-t/10.0), basex=2)    
+    # ax.loglog([0.0,0.95], [0.0,0.95], color='red')
+    axes = plt.gca()
+    axes.set_xlim([0.13,1])
+    axes.set_ylim([0.13,1])
+    
+    ax.set_xscale("log")
+    ax.set_yscale("log")    
+    ax.plot([0,1], [0,1], color='red')
     ax.scatter(y_true, y_pred)
     
-    plt.title("final points - mse: {:.5f}".format(mse))
+    plt.title("model {}, mse: {:.5f}".format(title,res['mse']))
     plt.xlabel("true final points")
-    plt.ylabel("predicted final points")    
+    plt.ylabel("predicted final points")
+    
+    png_path = os.path.join("plots/", title+"_sct.png")    
+    print("path", png_path)
+    fig.savefig(png_path)
+
+    fig.show()
+
+# results is list of dicts as returned by m.eval_cv, labels is list of according lables
+def box_plot(y_true, figsize, results, labels, title, steps=None):
+
+    fig = plt.figure(figsize=figsize)
+    
+    for i, result in enumerate(results):
+    
+        mses = []   # init of lists of mses
+        for j, y_pred in enumerate(result['y_preds']):
+            mses.append((y_pred - y_true.reshape(y_true.shape[0]))**2)
+            # print("this mse", labels[j], ((y_pred - y_true.reshape(y_true.shape[0]))**2).mean())
+            # print("this mse from list", labels[j], mses[-1].mean())
+
+        if len(results)>1:
+            ax = plt.subplot(1, len(results), i+1)
+            ax.set_title(title + str(steps[i]))
+        else:
+            ax = plt.subplot()
+            ax.set_title(title)
+    
+        ax.set_ylim([0.00001,1])
+        ax.set_yscale("log")     
+
+
+        bplot = ax.boxplot(mses,vert=True, patch_artist=True, showmeans=True, meanline=True)
+
+        plt.setp(ax, xticks=[y+1 for y in range(len(labels))],
+                 xticklabels=labels)
+
+    png_path = os.path.join("plots/", title+"_sct.png")    
+    print("path", png_path)
+    fig.savefig(png_path)
 
     fig.show()
 
 
+def pickle_from_file(fname):
+    
+    path = os.path.join("plots/", fname+".pickle")      
+    with open(path, 'rb') as handle:
+        obj = pickle.load(handle)
+        
+    return obj
+    
+    
+def pickle_to_file(obj, fname):
+    
+    path = os.path.join("plots/", fname+".pickle")      
+    
+    with open(path, 'wb') as handle:
+        pickle.dump(obj, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
 
 def get_run_name(prefix="run", additional=""):
     return "_".join([prefix, 

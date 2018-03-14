@@ -586,7 +586,12 @@ def eval_cv(model_type, X, Y, steps=(0,[0]), cfg={}, epochs=0, splits=3,
 
     results_val=[]    # list of validation results for each fold
     results_trn=[]    # ... but for task with 'nextstep' also on training data
-    y_pred = np.zeros(Y.shape[0])  # successively stores predictions on validation folds (on all unseen data)
+    # y_pred = np.zeros(Y.shape[0])  # successively stores predictions on validation folds (on all unseen data)
+    
+    #val_preds = []
+    #for i in range(steps[1]):
+    #    val_preds.append(np.zeros(y.shape[0]))
+    y_preds = [np.zeros(Y.shape[0]) for i in range(len(steps[1]))]  # for returning all predictions 
         
     fold_count = 0
     kfold = KFold(n_splits=splits, random_state=t.seed)
@@ -621,18 +626,21 @@ def eval_cv(model_type, X, Y, steps=(0,[0]), cfg={}, epochs=0, splits=3,
         if model_type in ['ridge', 'xgb']:
             trn_pred = model.predict(X[trn_idx]).reshape(trn_idx.shape[0])
             val_pred = model.predict(X[val_idx]).reshape(val_idx.shape[0])
+            y_preds[0][val_idx]=val_pred
             trn_mses.append(((trn_pred - trn_true) ** 2).mean())
             val_mses.append(((val_pred - val_true) ** 2).mean())                
         elif model_type == 'mlp':
             trn_pred = _pred_mlp(model, X, trn_idx, batch_size=cfg['batch_size'])                
             val_pred = _pred_mlp(model, X, val_idx, batch_size=cfg['batch_size'])
+            y_preds[0][val_idx]=val_pred
             trn_mses.append(((trn_pred - trn_true) ** 2).mean())
             val_mses.append(((val_pred - val_true) ** 2).mean())                
         else:   # if lstm or xgb_next, list of validation data
-            for val_steps in steps[1]:
+            for i, val_steps in enumerate(steps[1]):
                 if model_type == 'xgb_next':
                     val_pred = _pred_xgb_stepwise(model, X, val_steps, val_idx)
                     trn_pred = _pred_xgb_stepwise(model, X, val_steps, trn_idx)
+                    y_preds[i][val_idx]=val_pred                    
                 else:    # lstm
                     if mode == 'finalstep':
                         val_pred = _pred_lstm_direct(model, X, val_steps, val_idx, 
@@ -646,6 +654,8 @@ def eval_cv(model_type, X, Y, steps=(0,[0]), cfg={}, epochs=0, splits=3,
                                                             batch_size=cfg['batch_size'])
                     else:
                         print("invalid mode", mode)
+                        
+                y_preds[i][val_idx]=val_pred                         
 
                 trn_mses.append(((trn_pred - trn_true) ** 2).mean())
                 val_mses.append(((val_pred - val_true) ** 2).mean())
@@ -654,24 +664,11 @@ def eval_cv(model_type, X, Y, steps=(0,[0]), cfg={}, epochs=0, splits=3,
                 print("validate on {} steps, mse on train / validation data: {:.5f} / {:.5f}"\
                       .format(val_steps, trn_mses[-1], val_mses[-1]))
 
-        y_pred[val_idx] = val_pred   # store results only for last value in list of val_steps
+        # y_pred[val_idx] = val_pred   # store results only for last value in list of val_steps
 
         results_val.append(val_mses)
         results_trn.append(trn_mses)
-    '''    
-    # end for trn_idx, val_idx in kfold.split(Y):
-    else:     # for xgb, ridge etc. use skikitlearn cross_val_score()
 
-        fit_params = {}        
-        if model_type == 'mlp':
-            fit_params = {'callbacks': callbacks}
-
-        estimator = get_estimator(model_type, X, epochs, cfg, dropout=dropout, L1L2=L1L2)
-
-        # enforce MSE as scoring, to get comparable results for different models 
-        results_val = cross_val_score(estimator, X, Y, cv=kfold, scoring='neg_mean_squared_error', verbose=1,
-                                  fit_params=fit_params)
-    '''    
     results_val, results_trn = np.array(results_val), np.array(results_trn)
     val_means, trn_means = [], []
     
@@ -684,13 +681,13 @@ def eval_cv(model_type, X, Y, steps=(0,[0]), cfg={}, epochs=0, splits=3,
         print("MSE on train data on {} steps: means over folds: *** {} ***".format(steps[1], trn_means))
         print("Results training data of all Folds: \n{}".format(np.round(results_trn,5)))
         
-    mse_total = ((y_pred - Y.reshape(Y.shape[0])) ** 2).mean()
+    mse_total = ((y_preds[0] - Y.reshape(Y.shape[0])) ** 2).mean()
     print("mse over all validation data", mse_total)
 
-    result = {'y_pred'    : y_pred,
+    result = {'y_preds'   : y_preds,
               'mse'       : mse_total, 
               'trn_means' : trn_means, 
               'val_means' : val_means}
         
-    return result    
+    return result  
     # return y_pred, mse_total, trn_means, val_means
