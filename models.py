@@ -485,10 +485,9 @@ def _pred_lstm_stepwise(model, X, steps, idx, batch_size=20):
     # mse = ((y_pred - y_true) ** 2).mean()
     # print("mse stepwise internally", mse)
     
-    return y_pred
+    return y_pred, lcs_trunc
     
 
-    # return mse
 
 # function assumes X is tuple [configs, lcs] - function for external call via "split" value
 def eval_lstm_stepwise(model, X, Y, steps, split=200, batch_size=20):
@@ -497,8 +496,8 @@ def eval_lstm_stepwise(model, X, Y, steps, split=200, batch_size=20):
     idx_trn = np.arange(0,split)
     idx_val = np.arange(split,sample_no) 
     
-    y_pred_trn = _pred_lstm_stepwise(model, X, steps, idx_trn, batch_size=batch_size)
-    y_pred_val = _pred_lstm_stepwise(model, X, steps, idx_val, batch_size=batch_size)
+    y_pred_trn,_ = _pred_lstm_stepwise(model, X, steps, idx_trn, batch_size=batch_size)
+    y_pred_val,_ = _pred_lstm_stepwise(model, X, steps, idx_val, batch_size=batch_size)
     
     mse_trn = ((y_pred_trn - Y[idx_trn]) ** 2).mean()
     mse_val = ((y_pred_val - Y[idx_val]) ** 2).mean()
@@ -648,9 +647,9 @@ def eval_cv(model_type, X, Y, steps=(0,[0]), cfg={}, epochs=0, splits=3,
                         trn_pred = _pred_lstm_direct(model, X, val_steps, trn_idx,
                                                      cfg['batch_size'], mode = 'finalstep')
                     elif mode == 'nextstep':
-                        val_pred = _pred_lstm_stepwise(model, X, val_steps, val_idx,
+                        val_pred,_ = _pred_lstm_stepwise(model, X, val_steps, val_idx,
                                                           batch_size=cfg['batch_size'])
-                        trn_pred = _pred_lstm_stepwise(model, X, val_steps, trn_idx,
+                        trn_pred,_ = _pred_lstm_stepwise(model, X, val_steps, trn_idx,
                                                             batch_size=cfg['batch_size'])
                     else:
                         print("invalid mode", mode)

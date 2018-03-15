@@ -19,16 +19,58 @@ regul = {'lr_exp_decay' : False,
          'earlystop' : False, 
          'dropout' : False, 
          'L1L2' : False}
-'''         
-# res is dict as returned by m.eval_cv
-def scatter_plot(y_true, res, title):
+'''   
 
-    y_pred = res['y_pred']
+def scatter_plot_multi(y_true, figsize, results, title, steps=[]):
+
+    fig = plt.figure(figsize=figsize)
     
     y_true = y_true.reshape(y_true.shape[0])
+    
+    for i, y_pred in enumerate(results['y_preds']):    
 
-    fig = plt.figure(figsize=(5, 5))
-    ax = plt.subplot()    
+        mse = ((y_pred - y_true)**2).mean()
+        # print("mses", mse, res['mse'])
+
+        # fig = plt.figure(figsize=(10, 5))
+        ax = plt.subplot(1, len(results), i+1)
+
+        ax.set_xlim([0.13,1])
+        ax.set_ylim([0.13,1])
+
+        ax.set_xscale("log")
+        ax.set_yscale("log")    
+        ax.plot([0,1], [0,1], color='red')
+
+        ax.scatter(y_true, y_pred)
+    
+        ax.set_title("{} {} steps, mse: {:.4f}".format(title,steps[i],mse))
+        ax.set_xlabel("true final points")
+        # ax.setp(ax.get_xticklabels(), visible=False)      
+        
+        if i==0:
+            ax.set_ylabel("predicted final points")
+    
+    png_path = os.path.join("plots/", title+"_sct.png")    
+    # print("path", png_path)
+    fig.savefig(png_path)
+
+    fig.show()
+    
+
+def scatter_plot(y_true, res, title, idx=0):
+    
+    from matplotlib.ticker import FormatStrFormatter    
+
+    y_pred = res['y_preds'][idx]
+    y_true = y_true.reshape(y_true.shape[0])
+    
+    mse = ((y_pred - y_true)**2).mean()
+    # print("mses", mse, res['mse'])
+
+    # fig = plt.figure(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(5, 5))    
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     
     # fig, ax = plt.subplots()
     # fit = np.polyfit(y_true, y_pred, deg=1)
@@ -42,54 +84,108 @@ def scatter_plot(y_true, res, title):
     ax.set_xscale("log")
     ax.set_yscale("log")    
     ax.plot([0,1], [0,1], color='red')
+    
     ax.scatter(y_true, y_pred)
     
-    plt.title("model {}, mse: {:.5f}".format(title,res['mse']))
+    
+    plt.title("model {}, mse: {:.5f}".format(title,mse))
     plt.xlabel("true final points")
     plt.ylabel("predicted final points")
     
     png_path = os.path.join("plots/", title+"_sct.png")    
-    print("path", png_path)
-    fig.savefig(png_path)
+    # print("path", png_path)
+    plt.savefig(png_path)
 
-    fig.show()
+    plt.show()
+
 
 # results is list of dicts as returned by m.eval_cv, labels is list of according lables
-def box_plot(y_true, figsize, results, labels, title, steps=None):
+def box_plot_single(y_true, figsize, results, labels, title, steps=None):
 
     fig = plt.figure(figsize=figsize)
-    
+
+    mses = []   # init of lists of mses
     for i, result in enumerate(results):
+        y_pred = result['y_preds'][0]
+        mses.append((y_pred - y_true.reshape(y_true.shape[0]))**2)
+
+    ax = plt.subplot()
+    ax.set_title(title)
     
-        mses = []   # init of lists of mses
-        for j, y_pred in enumerate(result['y_preds']):
-            mses.append((y_pred - y_true.reshape(y_true.shape[0]))**2)
-            # print("this mse", labels[j], ((y_pred - y_true.reshape(y_true.shape[0]))**2).mean())
-            # print("this mse from list", labels[j], mses[-1].mean())
+    ax.set_ylim([0.00001,1])
+    ax.set_yscale("log")     
 
-        if len(results)>1:
-            ax = plt.subplot(1, len(results), i+1)
-            ax.set_title(title + str(steps[i]))
-        else:
-            ax = plt.subplot()
-            ax.set_title(title)
-    
-        ax.set_ylim([0.00001,1])
-        ax.set_yscale("log")     
+    bplot = ax.boxplot(mses,vert=True, patch_artist=True, showmeans=True, meanline=True)
+    plt.setp(ax, xticks=[y+1 for y in range(len(labels))],
+             xticklabels=labels)
 
-
-        bplot = ax.boxplot(mses,vert=True, patch_artist=True, showmeans=True, meanline=True)
-
-        plt.setp(ax, xticks=[y+1 for y in range(len(labels))],
-                 xticklabels=labels)
-
-    png_path = os.path.join("plots/", title+"_sct.png")    
-    print("path", png_path)
+    png_path = os.path.join("plots/", title+"_box.png")    
+    # print("path", png_path)
     fig.savefig(png_path)
 
-    fig.show()
+    fig.show()    
+
+    
+
+# results is list of dicts as returned by m.eval_cv, labels is list of according lables
+def table_plot(y_true, figsize, results, labels, title, steps=None):
+
+    fig = plt.figure(figsize=figsize)
+
+    mses = np.zeros((len(results), len(results[0]['y_preds'])))
+    
+    for i, result in enumerate(results):
+        for j, y_pred in enumerate(result['y_preds']):
+            mses[i][j] = ((y_pred - y_true.reshape(y_true.shape[0]))**2).mean()
+    print("mses", mses)                
+
+    table = [['%.2f' % j for j in i] for i in mses]    
+    
+    print("table", table)
+    
+    mses = np.round(mses,5)
+    ax = plt.subplot()    
+    # ax.axis('tight')
+    ax.axis('off')
+    the_table = ax.table(cellText=mses,colLabels=labels,rowLabels=steps,loc='center')
+
+    png_path = os.path.join("plots/", title+"_box.png")    
+    fig.savefig(png_path)
+
+    fig.show()    
+    
+    
+    
+
+# def extrapol_plot(cnn_after, x, ys, xlabel, ylabel, title=""):
+def extrapol_plot(lc_true, lc_pred, step, idx, title="extrapolate"):
+    
+    """Create and save matplotlib plot with the desired data.
+    ys is a dict of data lines with their labels as keys."""
+    
+    x = range(len(lc_true))    
+    
+    plt.figure()
+    # for (ylabel, y) in ys.items():
+    line_true = plt.plot(x,        lc_true,        label = "true learning curve", color = 'b')
+    line_pred = plt.plot(x[step:], lc_pred[step:], label = "extrapolation", color = 'r')
+    plt.title("rnn trained on random length \npredicting learning curve after step " + str(step))
+    # plt.xlabel(xlabel)    
+    # plt.legend([line_1,line_2], ['frozen cnn layers', 'unfreezing top 2 cnn layer-blocks'])
+    plt.legend()
+    # plt.legend([line_1,line_2], ['frozen cnn layers', 'gaga'])
+    
+    # plt.ylabel(ylabel)
 
 
+    
+    path = os.path.join("plots/", title+'_'+str(idx)+'_extra.png')
+    plt.savefig(path)    
+    
+    plt.show()       
+    
+
+    
 def pickle_from_file(fname):
     
     path = os.path.join("plots/", fname+".pickle")      
